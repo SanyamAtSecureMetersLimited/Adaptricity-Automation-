@@ -79,7 +79,7 @@ def setup_logger():
     if not os.path.exists('logs'):
         os.makedirs('logs')
 
-    logger = logging.getLogger('mv_overview_power_factor_automation')
+    logger = logging.getLogger('mv_overview_load_automation')
     logger.setLevel(logging.INFO)
 
     for handler in logger.handlers[:]:
@@ -87,7 +87,7 @@ def setup_logger():
 
     formatter = logging.Formatter('%(asctime)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-    log_file = 'logs/mv_overview_power_factor_automation.log'
+    log_file = 'logs/mv_overview_load_automation.log'
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
@@ -138,7 +138,7 @@ def save_file_to_output(file_path, output_folder):
 # CONFIGURATION FUNCTIONS
 # ============================================================================
 def create_default_config_file(config_file):
-    """Create default configuration Excel file for MV Overview Power Factor"""
+    """Create default configuration Excel file for MV Overview Load Profile"""
     try:
         config_data = {
             'Parameter': ['Area', 'Substation', 'Target_Date', 'Meter_Serial_No'],
@@ -160,7 +160,7 @@ def create_default_config_file(config_file):
                     'Save file before running',
                 ],
                 'Important_Notes': [
-                    'This script is FOR MV POWER FACTOR OVERVIEW ONLY',
+                    'This script is FOR MV LOAD PROFILE OVERVIEW ONLY',
                     'Values are case-sensitive',
                     'No extra spaces before/after values',
                     'Date format: DD/MM/YYYY',
@@ -171,7 +171,7 @@ def create_default_config_file(config_file):
             df_instructions = pd.DataFrame(instructions)
             df_instructions.to_excel(writer, sheet_name='Setup_Instructions', index=False)
 
-        logger.info(f"MV Overview Power Factor Configuration template created: {config_file}")
+        logger.info(f"MV Overview Load Profile Configuration template created: {config_file}")
         return True
     except Exception as e:
         logger.info(f"Error creating config file: {e}")
@@ -190,14 +190,14 @@ def normalize_date_ddmmyyyy(value):
 
 
 def read_user_configuration(config_file="user_config.xlsx"):
-    """Read user configuration from Excel file for MV Overview Power Factor"""
+    """Read user configuration from Excel file for MV Overview Load Profile"""
     try:
         if not os.path.exists(config_file):
             logger.info(f"Configuration file not found: {config_file}")
             return None
 
         df_config = pd.read_excel(config_file, sheet_name='User_Configuration')
-        config = {'type': 'MV_POWER_FACTOR'}  # Fixed for MV power factor monitoring
+        config = {'type': 'MV_LOAD'}  # Fixed for MV load monitoring
 
         for _, row in df_config.iterrows():
             param, value = row['Parameter'], row['Value']
@@ -224,7 +224,7 @@ def read_user_configuration(config_file="user_config.xlsx"):
                 logger.info(f"Placeholder value found: {key} = {value}")
                 return None
 
-        logger.info("MV Overview Power Factor Configuration loaded successfully")
+        logger.info("MV Overview Load Profile Configuration loaded successfully")
         return config
     except Exception as e:
         logger.info(f"Error reading configuration file: {e}")
@@ -234,13 +234,13 @@ def read_user_configuration(config_file="user_config.xlsx"):
 def validate_config_at_startup():
     """Validate configuration before starting browser"""
     logger.info("=" * 60)
-    logger.info("STARTING MV OVERVIEW POWER FACTOR AUTOMATION")
+    logger.info("STARTING MV OVERVIEW LOAD PROFILE AUTOMATION")
     logger.info("=" * 60)
 
     config_file = "user_config.xlsx"
     if not os.path.exists(config_file):
         logger.info(f"Configuration file not found: {config_file}")
-        logger.info("Creating default MV Overview Power Factor configuration template...")
+        logger.info("Creating default MV Overview Load Profile configuration template...")
         if create_default_config_file(config_file):
             logger.info(f"Created: {config_file}")
             logger.info("Please edit the configuration file and restart")
@@ -251,8 +251,8 @@ def validate_config_at_startup():
         logger.info("Configuration validation failed")
         return None
 
-    logger.info("MV Overview Power Factor Configuration validated successfully")
-    logger.info(f"   Monitoring Type: MV Power Factor Overview (Fixed)")
+    logger.info("MV Overview Load Profile Configuration validated successfully")
+    logger.info(f"   Monitoring Type: MV Load Profile Overview (Fixed)")
     logger.info(f"   Area: {config['area']}")
     logger.info(f"   Substation: {config['substation']}")
     logger.info(f"   Date: {config['target_date']}")
@@ -286,7 +286,7 @@ def log_execution_time(func):
 @log_execution_time
 def get_metrics(mtr_serial_no):
     """Get MV feeder metrics from database"""
-    logger.info(f"Fetching MV Overview Power Factor metrics for meter: {mtr_serial_no}")
+    logger.info(f"Fetching MV Overview Load Profile metrics for meter: {mtr_serial_no}")
     try:
         conn = psycopg2.connect(**DatabaseConfig.get_db1_params())
         cursor = conn.cursor()
@@ -311,9 +311,9 @@ def get_metrics(mtr_serial_no):
 
 
 @log_execution_time
-def get_database_data_for_power_factor_overview(target_date, mtr_id):
-    """Fetch database data for MV power factor overview"""
-    logger.info(f"Fetching MV power factor overview database data for date: {target_date}")
+def get_database_data_for_load_overview(target_date, feeder_name_value, meter_serial_no_value, node_id):
+    """Fetch database data for MV load profile overview"""
+    logger.info(f"Fetching MV load profile overview database data for date: {target_date}")
     target_dt = datetime.strptime(target_date, "%d/%m/%Y")
     start_date = target_dt.strftime("%Y-%m-%d")
     next_day = (target_dt + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -322,20 +322,72 @@ def get_database_data_for_power_factor_overview(target_date, mtr_id):
     try:
         conn = psycopg2.connect(**DatabaseConfig.get_db2_params())
 
-        query = f"""
-            SELECT surveydate, pf, avg_i
-            FROM {DatabaseConfig.TENANT_NAME}.tb_raw_loadsurveydata
-            WHERE mtrid = {mtr_id}
-              {date_filter}
-            ORDER BY surveydate ASC;
-        """
+        queries = {
+            "tb_nrm_loadsurveyprofile": f"""
+                SELECT surveydate, kva_i
+                FROM {DatabaseConfig.TENANT_NAME}.tb_nrm_loadsurveyprofile
+                WHERE nodeid={node_id} {date_filter}
+                ORDER BY surveydate ASC;
+            """,
+            "ampacity_query": f"""
+                SELECT conductor_ampacity
+                FROM {DatabaseConfig.TENANT_NAME}.tb_ntw_feeder
+                WHERE feeder_name = '{feeder_name_value}' AND meter_serial_no = '{meter_serial_no_value}'
+                LIMIT 1;
+            """,
+            "connected_dts_query": f"""
+                SELECT COUNT(dt_id) as connected_dts
+                FROM {DatabaseConfig.TENANT_NAME}.tb_ntw_dt
+                WHERE feeder_id = (
+                    SELECT feeder_id 
+                    FROM {DatabaseConfig.TENANT_NAME}.tb_ntw_feeder 
+                    WHERE feeder_name = '{feeder_name_value}' AND meter_serial_no = '{meter_serial_no_value}'
+                );
+            """
+        }
 
-        raw_df = pd.read_sql(query, conn)
-        logger.info(f"Retrieved: {len(raw_df)} MV power factor records")
-        return raw_df
+        # Execute load survey query
+        logger.info("Executing MV load profile database queries...")
+        logger.info(f"Date range: {start_date} to {next_day}")
+
+        nrm_df = pd.read_sql(queries["tb_nrm_loadsurveyprofile"], conn)
+
+        # Execute Conductor Ampacity query
+        logger.info("Fetching MV Conductor Ampacity...")
+        ampacity_cursor = conn.cursor()
+        ampacity_cursor.execute(queries["ampacity_query"])
+        ampacity_result = ampacity_cursor.fetchone()
+        ampacity_cursor.close()
+
+        if ampacity_result:
+            ampacity_value = ampacity_result[0]
+            logger.info(f"MV Ampacity fetched: {ampacity_value}")
+        else:
+            ampacity_value = None
+            logger.warning("MV Ampacity not found.")
+
+        # Execute Connected DTs query
+        logger.info("Fetching MV Connected DTs...")
+        connected_dts_cursor = conn.cursor()
+        connected_dts_cursor.execute(queries["connected_dts_query"])
+        connected_dts_result = connected_dts_cursor.fetchone()
+        connected_dts_cursor.close()
+
+        if connected_dts_result:
+            connected_dts_value = connected_dts_result[0]
+            logger.info(f"MV Connected DTs fetched: {connected_dts_value}")
+        else:
+            connected_dts_value = 0
+            logger.warning("MV Connected DTs not found, defaulting to 0.")
+
+        conn.close()
+
+        logger.info(f"MV Load Profile Database records retrieved: {len(nrm_df)} records")
+        return nrm_df, ampacity_value, connected_dts_value
+
     except Exception as e:
         logger.info(f"Database error: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None, 0
     finally:
         if 'conn' in locals():
             conn.close()
@@ -408,7 +460,7 @@ def set_calendar_date(driver, target_date):
 def select_type(driver):
     """Select MV monitoring - FIXED FOR MV ONLY"""
     try:
-        logger.info("Selecting MV monitoring (fixed for MV power factor overview script)")
+        logger.info("Selecting MV monitoring (fixed for MV load profile overview script)")
         time.sleep(5)
         driver.find_element(By.XPATH, "//A[@id='divHome']").click()
         time.sleep(5)
@@ -477,110 +529,137 @@ def find_and_click_view_using_search(driver, wait, meter_serial_no):
 
 
 @log_execution_time
-def collect_power_factor_overview_data(driver):
-    """Collect MV power factor data from overview"""
-    logger.info("Starting MV power factor data collection from overview section...")
+def collect_load_profile_overview_data(driver):
+    """Collect MV load profile overview data from piechart with Connected DTs"""
+    logger.info("Starting MV load profile piechart data collection from overview section...")
     data = {}
 
     try:
-        wait = WebDriverWait(driver, 5)
-        
-        logger.info("Clicking on MV Power factor tab...")
-        wait.until(EC.visibility_of_element_located(
-            (By.XPATH, "//div[@class='dx-item-content' and normalize-space()='Power factor']"))).click()
-        time.sleep(3)
-
         action = ActionChains(driver)
+        wait = WebDriverWait(driver, 5)
 
-        # Find all bars in the PF pattern chart
-        logger.info("Finding MV power factor pattern chart bars...")
-        pf_pattern_bars = driver.find_elements(By.CSS_SELECTOR, '#pfrangechart g.dxc-markers')
+        logger.info("Deactivating all MV chart legends...")
+        # Deactivate all legends first
+        driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#257E94"]').click()
+        driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#86B8A5"]').click()
+        driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#DEAE2A"]').click()
+        driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#E38430"]').click()
+        time.sleep(1)
 
-        tooltip_selector = '.dxc-tooltip svg text'
+        logger.info("Collecting MV Duration Load <30% data...")
+        # For Duration Load <30%
+        rect1 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#257E94"]')
+        rect1.click()
+        time.sleep(1)
+        path1 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxc-markers path[fill="#257E94"]')
+        action.move_to_element(path1).perform()
+        time.sleep(1)
+        tooltip = driver.find_element(By.CSS_SELECTOR, '.dxc-tooltip svg text')
+        p1_text = tooltip.text
+        rect1 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#257E94"]')
+        rect1.click()
+        logger.info(f"MV Duration Load <30%: {p1_text}")
 
-        # Initialize durations with '-'
-        pf_durations = {
-            'Duration PF < 0.9': '-',
-            'Duration PF 0.9 - 0.95': '-',
-            'Duration PF > 0.95': '-'
+        logger.info("Collecting MV Duration Load 30%-60% data...")
+        # For Duration Load 30%-60%
+        rect2 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#86B8A5"]')
+        rect2.click()
+        time.sleep(1)
+        path2 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxc-markers path[fill="#86B8A5"]')
+        action.move_to_element(path2).perform()
+        time.sleep(1)
+        tooltip = driver.find_element(By.CSS_SELECTOR, '.dxc-tooltip svg text')
+        p2_text = tooltip.text
+        rect2 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#86B8A5"]')
+        rect2.click()
+        logger.info(f"MV Duration Load 30%-60%: {p2_text}")
+
+        logger.info("Collecting MV Duration Load 60%-80% data...")
+        # For Duration Load 60%-80%
+        rect3 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#DEAE2A"]')
+        rect3.click()
+        time.sleep(1)
+        path3 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxc-markers path[fill="#DEAE2A"]')
+        action.move_to_element(path3).perform()
+        time.sleep(1)
+        tooltip = driver.find_element(By.CSS_SELECTOR, '.dxc-tooltip svg text')
+        p3_text = tooltip.text
+        rect3 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#DEAE2A"]')
+        rect3.click()
+        logger.info(f"MV Duration Load 60%-80%: {p3_text}")
+
+        logger.info("Collecting MV Duration Load >80% data...")
+        # For Duration Load >80%
+        rect4 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#E38430"]')
+        rect4.click()
+        time.sleep(1)
+        path4 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxc-markers path[fill="#E38430"]')
+        action.move_to_element(path4).perform()
+        time.sleep(1)
+        tooltip = driver.find_element(By.CSS_SELECTOR, '.dxc-tooltip svg text')
+        p4_text = tooltip.text
+        rect4 = driver.find_element(By.CSS_SELECTOR, '#dvLoadingTrend g.dxl-marker rect[fill="#E38430"]')
+        rect4.click()
+        logger.info(f"MV Duration Load >80%: {p4_text}")
+
+        # Extract MV Conductor Ampacity
+        ampacity_label = "Conductor Ampacity"
+        raw_ampacity_text = driver.find_element(By.XPATH, '//label[@id="lblConductorAmpacity"]').text
+        logger.info(f"Extracting MV Conductor Ampacity: {raw_ampacity_text}")
+
+        # Extract Connected DTs
+        connected_dts_text = driver.find_element(By.XPATH, '//label[@id="lblConnectedDT"]').text
+        logger.info(f"MV Connected DTs: {connected_dts_text}")
+
+        ampacity_value = re.findall(r"[\d.]+", raw_ampacity_text)[0] if raw_ampacity_text else "-"
+        connected_dts_value = re.findall(r"[\d.]+", connected_dts_text)[0] if connected_dts_text else "-"
+
+        # Final MV result
+        data['MV Load Table'] = {
+            ampacity_label: ampacity_value,
+            'Connected DTs': connected_dts_value,
+            'Duration Load < 30%': p1_text,
+            'Duration Load 30% - 60%': p2_text,
+            'Duration Load 60% - 80%': p3_text,
+            'Duration Load > 80%': p4_text
         }
 
-        color_mapping = {
-            '#D11920': 'Duration PF < 0.9',  # Red
-            '#DEAE2A': 'Duration PF 0.9 - 0.95',  # Orange
-            '#86B8A5': 'Duration PF > 0.95'  # Green
-        }
-
-        logger.info("Processing MV power factor chart bars...")
-        for i, bar in enumerate(pf_pattern_bars):
-            try:
-                fill_color = bar.get_attribute('fill')
-                label = color_mapping.get(fill_color)
-
-                if label:
-                    action.move_to_element(bar).perform()
-                    time.sleep(1)
-
-                    tooltip = driver.find_element(By.CSS_SELECTOR, tooltip_selector)
-                    tooltip_text = tooltip.text.strip()
-
-                    pf_durations[label] = tooltip_text
-                    logger.info(f"MV {label}: {tooltip_text}")
-                else:
-                    logger.warning(f"Unexpected MV bar color found: {fill_color}")
-            except Exception as e:
-                logger.error(f"Error processing MV PF bar {i + 1}: {str(e)}")
-
-        # Get MV Power Factor Average
-        try:
-            logger.info("Collecting MV Power Factor Average...")
-            pf_avg = driver.find_element(By.XPATH, "//span[@id='avgPf']").text
-            logger.info(f"MV Power Factor Average: {pf_avg}")
-        except Exception as e:
-            logger.error(f"Error fetching MV Power Factor Average: {str(e)}")
-            pf_avg = '-'
-
-        data['MV Power Factor Table'] = {
-            'Power Factor Average': pf_avg,
-            **pf_durations
-        }
-
-        logger.info("MV power factor data collection completed successfully")
+        logger.info("MV load profile piechart data collection completed successfully")
         logger.info(f"MV Collected data: {data}")
 
     except Exception as e:
-        logger.error(f"Error in MV power factor data collection: {str(e)}")
+        logger.error(f"Error in MV load profile piechart data collection: {str(e)}")
         raise
 
     return data
 
 
 @log_execution_time
-def save_power_factor_overview_data_to_excel(date_info, overview_data):
-    """Save MV power factor overview data to Excel"""
-    logger.info("Saving MV power factor overview data to Excel...")
+def save_load_profile_overview_data_to_excel(date_info, overview_data):
+    """Save MV load profile overview data to Excel"""
+    logger.info("Saving MV load profile overview data to Excel...")
 
     try:
         wb = Workbook()
         wb.remove(wb.active)
 
-        # MV Power Factor Table
-        ws_pf = wb.create_sheet("MV Power Factor Table")
-        ws_pf.append(["Parameter", "Value"])
+        # MV Load Table
+        ws_load = wb.create_sheet("MV Load Table")
+        ws_load.append(["Parameter", "Value"])
         
-        pf_table = overview_data['MV Power Factor Table']
-        for key, value in pf_table.items():
-            ws_pf.append([key, value])
-            logger.info(f"MV Power Factor Table - {key}: {value}")
+        load_table = overview_data['MV Load Table']
+        for key, value in load_table.items():
+            ws_load.append([key, value])
+            logger.info(f"MV Load Table - {key}: {value}")
 
         # Save
-        file_name = f"chart_data_from_ui_mv_power_factor_overview_{date_info['selected_date'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        file_name = f"chart_data_from_ui_mv_load_profile_overview_{date_info['selected_date'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         wb.save(file_name)
-        logger.info(f"MV power factor overview data saved: {file_name}")
+        logger.info(f"MV load profile overview data saved: {file_name}")
         return file_name
 
     except Exception as e:
-        logger.error(f"Error saving MV power factor overview data: {str(e)}")
+        logger.error(f"Error saving MV load profile overview data: {str(e)}")
         raise
 
 
@@ -588,82 +667,80 @@ def save_power_factor_overview_data_to_excel(date_info, overview_data):
 # DATABASE PROCESSING
 # ============================================================================
 @log_execution_time
-def process_power_factor_overview_database_calculations(raw_df, date_info):
-    """Process database calculations for MV power factor overview"""
-    logger.info("Processing MV power factor overview database calculations...")
+def process_load_profile_overview_database_calculations(nrm_df, ampacity_value, connected_dts_value, date_info):
+    """Process database calculations for MV load profile overview with Connected DTs"""
+    logger.info("Processing MV load profile overview database calculations...")
 
     try:
         date_safe = date_info['selected_date'].replace(' ', '_').replace('/', '_')
         timestamp = datetime.now().strftime('%Y%m%d_%H%M')
 
         # Calculate interval
-        if len(raw_df) > 1:
-            interval_minutes = int((raw_df['surveydate'].iloc[1] - raw_df['surveydate'].iloc[0]).total_seconds() / 60)
+        if len(nrm_df) > 1:
+            interval_minutes = int((nrm_df['surveydate'].iloc[1] - nrm_df['surveydate'].iloc[0]).total_seconds() / 60)
         else:
             interval_minutes = 15
 
-        processed_file = f"theoretical_mv_power_factor_overview_calculated_data_{date_safe}_{timestamp}.xlsx"
+        processed_file = f"theoretical_mv_load_profile_overview_calculated_data_{date_safe}_{timestamp}.xlsx"
 
-        if 'pf' in raw_df.columns:
-            pf_series = raw_df['pf'].dropna()
+        # Convert ampacity_value to float to ensure compatibility
+        ampacity_float = float(ampacity_value) if ampacity_value is not None else 1.0
 
-            # Calculate Average Power Factor
-            pf_avg = pf_series.mean()
-            logger.info(f"Calculated MV Power Factor Average: {pf_avg:.4f}")
+        # Handle zero or None ampacity values
+        if ampacity_float == 0:
+            logger.warning("MV Ampacity value is 0, using 1.0 to avoid division by zero")
+            ampacity_float = 1.0
 
-            # Duration calculation function
-            def calc_duration(pf_values):
-                count = len(pf_values)
-                if count == 0:
-                    return '-'
-                total_minutes = count * interval_minutes
-                hours = total_minutes / 60
-                return hours
+        # Create a temporary copy to process durations
+        temp_df = nrm_df.copy()
+        temp_df['kva_i'] = pd.to_numeric(temp_df['kva_i'], errors='coerce')
 
-            # Durations based on PF ranges
-            duration_gt_095 = calc_duration(pf_series[pf_series > 0.95])
-            duration_between_09_095 = calc_duration(pf_series[(pf_series >= 0.9) & (pf_series <= 0.95)])
-            duration_lt_09 = calc_duration(pf_series[pf_series < 0.9])
+        # Calculate load percentage relative to ampacity_float
+        temp_df['load_percent'] = (temp_df['kva_i'] / ampacity_float) * 100
 
-            # Convert hours into "HH:MM" format
-            def format_hours(hours_val):
-                if hours_val == '-':
-                    return '-'
-                total_minutes = int(hours_val * 60)
-                hrs = total_minutes // 60
-                mins = total_minutes % 60
-                return f"{hrs}:{mins:02d} hrs"
+        # Categorize load percent into bins
+        bins = [0, 30, 60, 80, float('inf')]
+        labels = ['<30%', '30-60%', '60-80%', '>80%']
+        temp_df['load_range'] = pd.cut(temp_df['load_percent'], bins=bins, labels=labels, right=False)
 
-            # Log calculated durations
-            logger.info("Calculated MV Power Factor Durations:")
-            logger.info(f"  DB Parameter: Duration PF < 0.9: {format_hours(duration_lt_09)}")
-            logger.info(f"  DB Parameter: Duration PF 0.9 - 0.95: {format_hours(duration_between_09_095)}")
-            logger.info(f"  DB Parameter: Duration PF > 0.95: {format_hours(duration_gt_095)}")
+        # Calculate duration for each load range
+        duration_dict = {label: '0:00 hrs' for label in labels}
+        counts = temp_df['load_range'].value_counts()
 
-            # Prepare MV Power Factor Table Data
-            pf_table_data = [
-                ['Power Factor Average', round(pf_avg, 4)],
-                ['Duration PF < 0.9', format_hours(duration_lt_09)],
-                ['Duration PF 0.9 - 0.95', format_hours(duration_between_09_095)],
-                ['Duration PF > 0.95', format_hours(duration_gt_095)]
-            ]
-            pf_table_df = pd.DataFrame(pf_table_data, columns=['Parameter', 'Value'])
+        for label in labels:
+            duration_mins = counts.get(label, 0) * interval_minutes
+            if duration_mins > 0:
+                hours = duration_mins // 60
+                minutes = duration_mins % 60
+                duration_dict[label] = f"{int(hours)}:{int(minutes):02d} hrs"
 
-        else:
-            logger.warning("'pf' column not found in MV_RAW_Database")
-            pf_table_df = pd.DataFrame(columns=['Parameter', 'Value'])
+        # Log calculated durations
+        logger.info("Calculated MV Load Profile Durations:")
+        for label, duration in duration_dict.items():
+            logger.info(f"  DB Parameter: Duration Load {label}: {duration}")
+
+        # Prepare MV Load Table Data with Connected DTs
+        load_table_data = [
+            ['Conductor Ampacity', ampacity_value],
+            ['Connected DTs', connected_dts_value],
+            ['Duration Load < 30%', duration_dict['<30%']],
+            ['Duration Load 30% - 60%', duration_dict['30-60%']],
+            ['Duration Load 60% - 80%', duration_dict['60-80%']],
+            ['Duration Load > 80%', duration_dict['>80%']]
+        ]
+        load_table_df = pd.DataFrame(load_table_data, columns=['Parameter', 'Value'])
 
         # Save to Excel
         with pd.ExcelWriter(processed_file, engine="openpyxl") as writer:
-            raw_df.to_excel(writer, sheet_name='MV_RAW_Database', index=False)
-            pf_table_df.to_excel(writer, sheet_name='MV Power Factor Table', index=False)
+            nrm_df.to_excel(writer, sheet_name='MV_NRM_Database', index=False)
+            load_table_df.to_excel(writer, sheet_name='MV Load Table', index=False)
 
-        logger.info(f"Processed MV power factor overview data saved: {processed_file}")
+        logger.info(f"Processed MV load profile overview data saved: {processed_file}")
 
         return processed_file
 
     except Exception as e:
-        logger.error(f"Error processing MV power factor overview database: {str(e)}")
+        logger.error(f"Error processing MV load profile overview database: {str(e)}")
         raise
 
 
@@ -671,32 +748,23 @@ def process_power_factor_overview_database_calculations(raw_df, date_info):
 # COMPARISON AND VALIDATION
 # ============================================================================
 @log_execution_time
-def create_power_factor_overview_comparison(chart_file, processed_file, date_info):
-    """Create complete MV power factor overview comparison with validation"""
-    logger.info("Creating MV power factor overview comparison...")
+def create_load_profile_overview_comparison(chart_file, processed_file, date_info):
+    """Create complete MV load profile overview comparison with validation"""
+    logger.info("Creating MV load profile overview comparison...")
 
     try:
         date_safe = date_info['selected_date'].replace(' ', '_').replace('/', '_')
-        output_file = f"complete_validation_report_mv_power_factor_overview_{date_safe}.xlsx"
+        output_file = f"complete_validation_report_mv_load_profile_overview_{date_safe}.xlsx"
 
-        # Load both Excel files
-        wb_processed = load_workbook(processed_file)
-        wb_chart = load_workbook(chart_file)
+        # Read "MV Load Table" sheets
+        chart_df = pd.read_excel(chart_file, sheet_name="MV Load Table")
+        processed_df = pd.read_excel(processed_file, sheet_name="MV Load Table")
 
-        # Read MV Power Factor Table sheet
-        ws_processed = wb_processed['MV Power Factor Table']
-        ws_chart = wb_chart['MV Power Factor Table']
-
-        # Convert sheets to DataFrames
-        processed_df = pd.DataFrame(ws_processed.values)
-        chart_df = pd.DataFrame(ws_chart.values)
-
-        # Assign headers
-        processed_df.columns = processed_df.iloc[0]
-        processed_df = processed_df[1:]
-
-        chart_df.columns = chart_df.iloc[0]
-        chart_df = chart_df[1:]
+        # Prepare comparison DataFrame
+        comparison_df = pd.DataFrame()
+        comparison_df['Parameter'] = processed_df['Parameter']
+        comparison_df['DB_Value'] = processed_df['Value']
+        comparison_df['Chart_Value'] = chart_df['Value']
 
         # Colors
         green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -705,48 +773,56 @@ def create_power_factor_overview_comparison(chart_file, processed_file, date_inf
         wb = Workbook()
         wb.remove(wb.active)
 
-        ws = wb.create_sheet(title="MV Power Factor Table Comparison")
+        ws = wb.create_sheet(title="MV Load Table Comparison")
         ws.append(['Parameter', 'DB_Value', 'Chart_Value', 'Difference', 'Match'])
 
         validation_results = []
 
-        for idx, row in processed_df.iterrows():
+        # Calculate Difference & Match
+        for idx, row in comparison_df.iterrows():
             param = row['Parameter']
+            p_val = row['DB_Value']
+            c_val = row['Chart_Value']
 
-            chart_row = chart_df.loc[chart_df['Parameter'] == param]
-            if chart_row.empty:
-                logger.warning(f"MV Parameter {param} not found in Chart file!")
-                validation_results.append({'item': param, 'match': False})
-                continue
-
-            proc_value = row['Value']
-            chart_value = chart_row['Value'].values[0]
-
-            # Float vs String handling
             try:
-                proc_float = float(proc_value)
-                chart_float = float(chart_value)
-                diff = abs(proc_float - chart_float)
-                is_match = diff < 0.01
-                diff_disp = round(diff, 4)
+                # Numeric comparison
+                p_float = float(p_val)
+                c_float = float(c_val)
+                diff = round(abs(p_float - c_float), 1)
+
+                if diff <= 0.1:
+                    match = "YES"
+                    is_match = True
+                else:
+                    match = "NO"
+                    is_match = False
+
             except:
-                diff = None
-                is_match = (str(proc_value).strip() == str(chart_value).strip())
-                diff_disp = 'StringMismatch' if not is_match else '0'
+                # String comparison
+                if str(p_val).strip() == str(c_val).strip():
+                    diff = 0
+                    match = "YES"
+                    is_match = True
+                else:
+                    diff = "NOT A MATCH"
+                    match = "NO"
+                    is_match = False
 
-            match_text = "YES" if is_match else "NO"
-            validation_results.append({'item': param, 'match': is_match})
+            logger.info(f"MV Load Profile comparison - {param}: DB={p_val}, Chart={c_val}, Match={match}")
 
-            logger.info(f"MV Power Factor comparison - {param}: DB={proc_value}, Chart={chart_value}, Match={match_text}")
+            validation_results.append({
+                'item': param,
+                'match': is_match
+            })
 
-            ws.append([param, proc_value, chart_value, diff_disp, match_text])
+            ws.append([param, p_val, c_val, diff, match])
 
-            # Apply coloring
-            row_idx = ws.max_row
-            diff_cell = ws.cell(row=row_idx, column=4)
-            match_cell = ws.cell(row=row_idx, column=5)
+        # Apply coloring
+        for row in range(2, ws.max_row + 1):
+            diff_cell = ws.cell(row=row, column=4)
+            match_cell = ws.cell(row=row, column=5)
 
-            if is_match:
+            if match_cell.value == "YES":
                 diff_cell.fill = green_fill
                 match_cell.fill = green_fill
             else:
@@ -757,16 +833,16 @@ def create_power_factor_overview_comparison(chart_file, processed_file, date_inf
 
         passed_count = sum(1 for result in validation_results if result['match'])
         failed_count = len(validation_results) - passed_count
-        logger.info(f"MV Power Factor Table Validation: {passed_count} passed, {failed_count} failed")
+        logger.info(f"MV Load Table Validation: {passed_count} passed, {failed_count} failed")
 
-        validation_dict = {'MV Power Factor Table': validation_results}
+        validation_dict = {'MV Load Table': validation_results}
 
-        logger.info(f"MV power factor overview comparison saved: {output_file}")
+        logger.info(f"MV load profile overview comparison saved: {output_file}")
 
         return output_file, validation_dict
 
     except Exception as e:
-        logger.error(f"Error creating MV power factor overview comparison: {str(e)}")
+        logger.error(f"Error creating MV load profile overview comparison: {str(e)}")
         raise
 
 
@@ -774,15 +850,15 @@ def create_power_factor_overview_comparison(chart_file, processed_file, date_inf
 # SUMMARY REPORT
 # ============================================================================
 @log_execution_time
-def create_power_factor_overview_summary_report(config, date_info, chart_file, processed_file,
-                                  comparison_file, validation_results, raw_df, meter_name):
-    """Create comprehensive MV power factor overview summary report with ENHANCED styling"""
-    logger.info("Creating MV power factor overview summary report with enhanced styling...")
+def create_load_profile_overview_summary_report(config, date_info, chart_file, processed_file,
+                                  comparison_file, validation_results, nrm_df, meter_name):
+    """Create comprehensive MV load profile overview summary report with ENHANCED styling"""
+    logger.info("Creating MV load profile overview summary report with enhanced styling...")
 
     try:
         date_safe = date_info['selected_date'].replace(' ', '_').replace('/', '_')
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        summary_file = f"COMPLETE_VALIDATION_SUMMARY_MV_POWER_FACTOR_OVERVIEW_{date_safe}_{timestamp}.xlsx"
+        summary_file = f"COMPLETE_VALIDATION_SUMMARY_MV_LOAD_PROFILE_OVERVIEW_{date_safe}_{timestamp}.xlsx"
 
         wb = Workbook()
         ws = wb.active
@@ -840,7 +916,7 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
         # ============ MAIN HEADER ============
         ws.merge_cells(f'A{current_row}:H{current_row}')
         header_cell = ws[f'A{current_row}']
-        header_cell.value = f"MV POWER FACTOR OVERVIEW VALIDATION SUMMARY - {date_info['selected_date'].upper()}"
+        header_cell.value = f"MV LOAD PROFILE OVERVIEW VALIDATION SUMMARY - {date_info['selected_date'].upper()}"
         header_cell.font = main_header_font
         header_cell.fill = main_header_fill
         header_cell.alignment = main_header_alignment
@@ -920,7 +996,7 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
             ["Meter Serial No:", config['meter_serial_no']],
             ["Feeder Name:", meter_name],
             ["Meter Type:", config['meter_type']],
-            ["Monitoring Type:", "MV Power Factor Overview (Fixed)"],
+            ["Monitoring Type:", "MV Load Profile Overview (Fixed)"],
             ["Database Tenant:", DatabaseConfig.TENANT_NAME],
         ]
 
@@ -972,13 +1048,13 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
         total_chart_points = 0
         try:
             chart_wb = load_workbook(chart_file)
-            pf_sheet = chart_wb['MV Power Factor Table']
-            total_chart_points = len(list(pf_sheet.iter_rows())) - 1
+            load_sheet = chart_wb['MV Load Table']
+            total_chart_points = len(list(load_sheet.iter_rows())) - 1
         except:
-            total_chart_points = 4
+            total_chart_points = 6
 
         data_rows = [
-            ["MV RAW Database Records", len(raw_df), "COMPLETE RECORDS" if len(raw_df) > 0 else "NO DATA"],
+            ["MV NRM Database Records", len(nrm_df), "COMPLETE RECORDS" if len(nrm_df) > 0 else "NO DATA"],
             ["Chart Data Points", total_chart_points, "COMPLETE RECORDS"],
         ]
 
@@ -1024,7 +1100,7 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
         current_row += 1
 
         # Column headers
-        validation_headers = ["PF Parameter Type", "Matches", "Mismatches", "Success Rate", "Status"]
+        validation_headers = ["Load Parameter Type", "Matches", "Mismatches", "Success Rate", "Status"]
         for i, header in enumerate(validation_headers, start=1):
             col_letter = chr(64 + i)
             cell = ws[f'{col_letter}{current_row}']
@@ -1054,8 +1130,8 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
             overall_passed += passed_items
             overall_total += total_items
 
-        for pf_param, matches, mismatches, rate, status in validation_data:
-            ws[f'A{current_row}'].value = pf_param
+        for load_param, matches, mismatches, rate, status in validation_data:
+            ws[f'A{current_row}'].value = load_param
             ws[f'A{current_row}'].font = data_font
             ws[f'A{current_row}'].fill = data_fill
             ws[f'A{current_row}'].alignment = data_alignment
@@ -1110,15 +1186,15 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
         overall_success_rate = (overall_passed / overall_total) * 100 if overall_total > 0 else 0
 
         if overall_success_rate >= 95:
-            assessment = "✓ EXCELLENT: MV power factor overview validation passed with high confidence"
+            assessment = "✓ EXCELLENT: MV load profile overview validation passed with high confidence"
             assessment_color = pass_fill
             assessment_font_color = pass_font
         elif overall_success_rate >= 80:
-            assessment = "⚠ GOOD: Minor MV power factor discrepancies found - Review recommended"
+            assessment = "⚠ GOOD: Minor MV load profile discrepancies found - Review recommended"
             assessment_color = warning_fill
             assessment_font_color = warning_font
         else:
-            assessment = "❌ REQUIRES ATTENTION: Significant MV power factor validation failures detected"
+            assessment = "❌ REQUIRES ATTENTION: Significant MV load profile validation failures detected"
             assessment_color = fail_fill
             assessment_font_color = fail_font
 
@@ -1154,21 +1230,21 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
             ws.column_dimensions[col_letter].width = width
 
         wb.save(summary_file)
-        logger.info(f"Enhanced MV power factor overview summary report created: {summary_file}")
+        logger.info(f"Enhanced MV load profile overview summary report created: {summary_file}")
 
         # Log summary
         logger.info("=" * 60)
-        logger.info("MV POWER FACTOR OVERVIEW VALIDATION SUMMARY")
+        logger.info("MV LOAD PROFILE OVERVIEW VALIDATION SUMMARY")
         logger.info("=" * 60)
         logger.info(f"Test Engineer: {TestEngineer.NAME}")
-        logger.info(f"Data: RAW={len(raw_df)}, Chart={total_chart_points}")
+        logger.info(f"Data: NRM={len(nrm_df)}, Chart={total_chart_points}")
         logger.info(f"Overall Success Rate: {overall_success_rate:.1f}%")
         logger.info("=" * 60)
 
         return summary_file
 
     except Exception as e:
-        logger.error(f"Error creating MV power factor summary report: {str(e)}")
+        logger.error(f"Error creating MV load profile summary report: {str(e)}")
         raise
 
 
@@ -1176,8 +1252,8 @@ def create_power_factor_overview_summary_report(config, date_info, chart_file, p
 # MAIN AUTOMATION FUNCTION
 # ============================================================================
 @log_execution_time
-def main_mv_power_factor_overview_automation():
-    """Main MV Power Factor Overview automation process"""
+def main_mv_load_profile_overview_automation():
+    """Main MV Load Profile Overview automation process"""
     config = None
     driver = None
     output_folder = None
@@ -1214,7 +1290,7 @@ def main_mv_power_factor_overview_automation():
             return False
 
         # Apply configuration
-        logger.info("Applying MV Power Factor Overview configuration...")
+        logger.info("Applying MV Load Profile Overview configuration...")
         select_type(driver)
         select_dropdown_option(driver, "ddl-area", config['area'])
         select_dropdown_option(driver, "ddl-substation", config['substation'])
@@ -1239,6 +1315,7 @@ def main_mv_power_factor_overview_automation():
             return False
 
         logger.info(f"MV Feeder found: {name} (ID: {feeder_id})")
+        node_id = feeder_id
 
         # Find and click View
         time.sleep(3)
@@ -1249,54 +1326,56 @@ def main_mv_power_factor_overview_automation():
         # Wait for overview page to load
         time.sleep(5)
 
-        # Collect power factor overview data
-        logger.info("Collecting MV power factor overview data from UI...")
-        overview_data = collect_power_factor_overview_data(driver)
+        # Collect load profile overview data
+        logger.info("Collecting MV load profile overview data from UI...")
+        overview_data = collect_load_profile_overview_data(driver)
 
-        # Save power factor overview data
-        chart_file = save_power_factor_overview_data_to_excel(date_info, overview_data)
+        # Save load profile overview data
+        chart_file = save_load_profile_overview_data_to_excel(date_info, overview_data)
         if chart_file:
             chart_file = save_file_to_output(chart_file, output_folder)
 
         # Get database data
-        raw_df = get_database_data_for_power_factor_overview(config['target_date'], mtr_id)
+        nrm_df, ampacity_value, connected_dts_value = get_database_data_for_load_overview(
+            config['target_date'], name, config['meter_serial_no'], node_id)
 
-        if raw_df.empty:
+        if nrm_df.empty:
             logger.info("No database data found")
             return False
 
         # Process database calculations
-        logger.info("Processing MV power factor database calculations...")
-        processed_file = process_power_factor_overview_database_calculations(raw_df, date_info)
+        logger.info("Processing MV load profile database calculations...")
+        processed_file = process_load_profile_overview_database_calculations(
+            nrm_df, ampacity_value, connected_dts_value, date_info)
         processed_file = save_file_to_output(processed_file, output_folder)
 
         # Create comparison report
-        logger.info("Creating MV power factor validation comparison...")
-        comparison_file, validation_results = create_power_factor_overview_comparison(
+        logger.info("Creating MV load profile validation comparison...")
+        comparison_file, validation_results = create_load_profile_overview_comparison(
             chart_file, processed_file, date_info)
         comparison_file = save_file_to_output(comparison_file, output_folder)
 
         # Create summary report
-        logger.info("Creating comprehensive MV power factor summary...")
-        summary_report = create_power_factor_overview_summary_report(
+        logger.info("Creating comprehensive MV load profile summary...")
+        summary_report = create_load_profile_overview_summary_report(
             config, date_info, chart_file, processed_file,
-            comparison_file, validation_results, raw_df, name)
+            comparison_file, validation_results, nrm_df, name)
         if summary_report:
             summary_report = save_file_to_output(summary_report, output_folder)
 
         # Final summary
         logger.info("=" * 60)
-        logger.info("MV POWER FACTOR OVERVIEW AUTOMATION COMPLETED SUCCESSFULLY!")
+        logger.info("MV LOAD PROFILE OVERVIEW AUTOMATION COMPLETED SUCCESSFULLY!")
         logger.info("=" * 60)
         logger.info(f"Test Engineer: {TestEngineer.NAME}")
-        logger.info(f"Monitoring Type: MV Power Factor Overview (Fixed)")
+        logger.info(f"Monitoring Type: MV Load Profile Overview (Fixed)")
         logger.info(f"Output Folder: {output_folder}")
         logger.info(f"Date: {config['target_date']}")
         logger.info(f"Area: {config['area']}")
         logger.info(f"Substation: {config['substation']}")
         logger.info(f"Meter: {config['meter_serial_no']} ({name})")
         logger.info(f"Meter Type: {config['meter_type']}")
-        logger.info(f"Database Records: {len(raw_df)} records")
+        logger.info(f"Database Records: {len(nrm_df)} records")
         logger.info("")
         logger.info("Generated Files (4 total):")
         logger.info(f"   1. {os.path.basename(chart_file) if chart_file else 'Chart data'}")
@@ -1305,10 +1384,10 @@ def main_mv_power_factor_overview_automation():
         logger.info(f"   4. {os.path.basename(summary_report) if summary_report else 'Summary report'}")
         logger.info("")
         logger.info("KEY FEATURES APPLIED:")
-        logger.info("   ✓ MV Power Factor Overview monitoring (fixed)")
+        logger.info("   ✓ MV Load Profile Overview monitoring (fixed)")
         logger.info("   ✓ Search box meter selection")
-        logger.info("   ✓ Power factor pattern chart extraction")
-        logger.info("   ✓ PF Average & Duration extraction")
+        logger.info("   ✓ Piechart load distribution extraction")
+        logger.info("   ✓ Conductor Ampacity & Connected DTs")
         logger.info("   ✓ Centralized DB configuration")
         logger.info("   ✓ Test engineer details included")
         logger.info("   ✓ Enhanced comparison with color coding")
@@ -1324,7 +1403,7 @@ def main_mv_power_factor_overview_automation():
             try:
                 error_file = os.path.join(output_folder, f"error_log_{datetime.now().strftime('%Y%m%d_%H%M')}.txt")
                 with open(error_file, 'w') as f:
-                    f.write(f"MV Power Factor Overview Automation Error\n")
+                    f.write(f"MV Load Profile Overview Automation Error\n")
                     f.write(f"Time: {datetime.now()}\n")
                     f.write(f"Error: {str(e)}\n")
                     f.write(f"Config: {config}\n")
@@ -1349,19 +1428,19 @@ def main_mv_power_factor_overview_automation():
 # ============================================================================
 if __name__ == "__main__":
     logger.info("=" * 60)
-    logger.info("MV POWER FACTOR OVERVIEW AUTOMATION - COMPLETE VERSION")
+    logger.info("MV LOAD PROFILE OVERVIEW AUTOMATION - COMPLETE VERSION")
     logger.info("=" * 60)
     logger.info(f"Test Engineer: {TestEngineer.NAME}")
-    logger.info(f"Monitoring Type: MV Power Factor Overview (Fixed)")
+    logger.info(f"Monitoring Type: MV Load Profile Overview (Fixed)")
     logger.info(f"Database Tenant: {DatabaseConfig.TENANT_NAME}")
     logger.info("")
     logger.info("FEATURES:")
-    logger.info("   ✓ MV Power Factor Overview monitoring only")
+    logger.info("   ✓ MV Load Profile Overview monitoring only")
     logger.info("   ✓ Search box meter selection")
     logger.info("   ✓ Centralized database configuration")
-    logger.info("   ✓ Power factor pattern extraction (3 ranges)")
-    logger.info("   ✓ PF Average calculation")
-    logger.info("   ✓ Duration calculations (PF ranges)")
+    logger.info("   ✓ Piechart load distribution (4 ranges)")
+    logger.info("   ✓ Conductor Ampacity extraction")
+    logger.info("   ✓ Connected DTs monitoring")
     logger.info("   ✓ Enhanced value parsing")
     logger.info("   ✓ Better null/dash handling")
     logger.info("   ✓ Test engineer details in reports")
@@ -1369,28 +1448,28 @@ if __name__ == "__main__":
     logger.info("=" * 60)
 
     start_time = time.time()
-    success = main_mv_power_factor_overview_automation()
+    success = main_mv_load_profile_overview_automation()
     end_time = time.time()
     total_time = end_time - start_time
 
     logger.info("=" * 60)
     if success:
-        logger.info("MV POWER FACTOR OVERVIEW AUTOMATION COMPLETED SUCCESSFULLY ✓")
+        logger.info("MV LOAD PROFILE OVERVIEW AUTOMATION COMPLETED SUCCESSFULLY ✓")
         logger.info(f"Total Time: {total_time:.2f}s ({total_time / 60:.1f}min)")
         logger.info("All optimizations verified:")
-        logger.info("   ✓ MV Power Factor Overview monitoring (fixed)")
+        logger.info("   ✓ MV Load Profile Overview monitoring (fixed)")
         logger.info("   ✓ Search box selection")
         logger.info("   ✓ Centralized DB config")
-        logger.info("   ✓ PF pattern extraction")
-        logger.info("   ✓ PF Average & Durations")
+        logger.info("   ✓ Piechart extraction")
+        logger.info("   ✓ Ampacity & Connected DTs")
         logger.info("   ✓ Enhanced parsing")
         logger.info("   ✓ Test engineer details")
         logger.info("   ✓ All 4 output files generated")
     else:
-        logger.info("MV POWER FACTOR OVERVIEW AUTOMATION FAILED ✗")
+        logger.info("MV LOAD PROFILE OVERVIEW AUTOMATION FAILED ✗")
         logger.info(f"Failed after: {total_time:.2f}s ({total_time / 60:.1f}min)")
         logger.info("Check error logs in output folder")
 
     logger.info("=" * 60)
-    logger.info("MV Power Factor Overview Automation Finished")
+    logger.info("MV Load Profile Overview Automation Finished")
     logger.info("=" * 60)
