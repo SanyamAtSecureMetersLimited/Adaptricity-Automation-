@@ -339,7 +339,7 @@ def get_database_data_for_monthly_demand_overview(month_info, mtr_id):
 
         # RAW QUERY for demand parameters - energy values
         raw_query = f"""
-            SELECT surveydate, kwh_i, kvah_i, kvar_i_total
+            SELECT surveydate,kwh_i, kvah_i, kvar_i_total, kwh_abs, kvah_abs, kvarh_abs
             FROM {DatabaseConfig.TENANT_NAME}.tb_raw_loadsurveydata 
             WHERE mtrid={mtr_id} {date_filter}
             ORDER BY surveydate ASC;
@@ -366,8 +366,8 @@ def login(driver):
         logger.info("Logging in...")
         driver.get("https://networkmonitoringpv.secure.online:10122/")
         time.sleep(1)
-        driver.find_element(By.ID, "UserName").send_keys("SANYAM")
-        driver.find_element(By.ID, "Password").send_keys("Sanyam@1234")
+        driver.find_element(By.ID, "UserName").send_keys("Secure")
+        driver.find_element(By.ID, "Password").send_keys("Secure@12345")
         time.sleep(10)
         driver.find_element(By.ID, "btnlogin").click()
         time.sleep(5)
@@ -615,43 +615,108 @@ def process_demand_overview_database_calculations(raw_df, month_info):
         processed_file = f"theoretical_monthly_demand_overview_calculated_data_{month_safe}_{timestamp}.xlsx"
 
         # Calculate DEMAND from RAW energy data
+        # Calculate DEMAND from RAW energy data
         demand_calculated = pd.DataFrame()
-        column_map = {
-            'kwh_i': 'kw_i',
-            'kvah_i': 'kva_i',
-            'kvar_i_total': 'kvar_i'
-        }
-
-        for raw_col, demand_col in column_map.items():
-            if raw_col in raw_df.columns:
-                raw_values = pd.to_numeric(raw_df[raw_col], errors='coerce')
-                demand_calculated[demand_col] = raw_values / sip_duration_in_hr
-                logger.info(f"✅ Calculated {demand_col} from raw {raw_col}")
-            else:
-                logger.warning(f"Column '{raw_col}' not found")
-                demand_calculated[demand_col] = 0
-
         demand_calculated['surveydate'] = raw_df['surveydate']
+
+        logger.info("=" * 60)
+        logger.info("CONVERSION LOGIC:")
+        logger.info("  Active Power: ALWAYS using kwh_abs (not kwh_i)")
+        logger.info("  Apparent Power: ALWAYS using kvah_abs (not kvah_i)")
+        logger.info("  Reactive Power: Using kvar_i_total, fallback to kvarh_abs if NULL")
+        logger.info("  Roundoff: 2 decimal places")
+        logger.info("=" * 60)
+
+        # ACTIVE POWER - ALWAYS from ABS with ROUNDOFF
+        if 'kwh_abs' in raw_df.columns:
+            demand_calculated['kw_i'] = (pd.to_numeric(raw_df['kwh_abs'], errors='coerce') / sip_duration_in_hr).round(2)
+            logger.info(
+                f"Active Power: Using kwh_abs, converted {demand_calculated['kw_i'].notna().sum()} records (rounded to 2 decimals)")
+        else:
+            logger.error("CRITICAL: kwh_abs column not found!")
+            demand_calculated['kw_i'] = None
+
+        # APPARENT POWER - ALWAYS from ABS with ROUNDOFF
+        if 'kvah_abs' in raw_df.columns:
+            demand_calculated['kva_i'] = (
+                        pd.to_numeric(raw_df['kvah_abs'], errors='coerce') / sip_duration_in_hr).round(2)
+            logger.info(
+                f"Apparent Power: Using kvah_abs, converted {demand_calculated['kva_i'].notna().sum()} records (rounded to 2 decimals)")
+        else:
+            logger.error("CRITICAL: kvah_abs column not found!")
+            demand_calculated['kva_i'] = None
+
+        # REACTIVE POWER - IMPORT first, fallback to ABS if NULL with ROUNDOFF
+        if 'kvar_i_total' in raw_df.columns and 'kvarh_abs' in raw_df.columns:
+            # Start with IMPORT values
+            demand_calculated['kvar_i'] = (
+                        pd.to_numeric(raw_df['kvar_i_total'], errors='coerce') / sip_duration_in_hr).round(2)
+            import_count = demand_calculated['kvar_i'].notna().sum()
+
+            # Fill NULL values with ABS
+            null_mask = demand_calculated['kvar_i'].isna()
+            demand_calculated.loc[null_mask, 'kvar_i'] = (
+                        pd.to_numeric(raw_df.loc[null_mask, 'kvarh_abs'], errors='coerce') / sip_duration_in_hr).round(
+                2)
+            abs_filled = demand_calculated.loc[null_mask, 'kvar_i'].notna().sum()
+
+            logger.info(
+                f"Reactive Power: Using kvar_i_total for {import_count} records, filled {abs_filled} NULLs from kvarh_abs (rounded to 2 decimals)")
+        elif 'kvar_i_total' in raw_df.columns:
+            demand_calculated['kvar_i'] = (
+                        pd.to_numeric(raw_df['kvar_i_total'], errors='coerce') / sip_duration_in_hr).round(2)
+            logger.info(f"Reactive Power: Using only kvar_i_total (kvarh_abs not available, rounded to 2 decimals)")
+        elif 'kvarh_abs' in raw_df.columns:
+            demand_calculated['kvar_i'] = (
+                        pd.to_numeric(raw_df['kvarh_abs'], errors='coerce') / sip_duration_in_hr).round(2)
+            logger.info(f"Reactive Power: Using only kvarh_abs (kvar_i_total not available, rounded to 2 decimals)")
+        else:
+            logger.error("CRITICAL: Neither kvar_i_total nor kvarh_abs found!")
+            demand_calculated['kvar_i'] = None
+
+        logger.info("Converted RAW energy to demand with 2 decimal place roundoff")
+
+        # DEBUG: Log sample of converted data
+        if not demand_calculated.empty:
+            logger.info("=" * 60)
+            logger.info("DEBUG: Sample of converted data (first 5 records):")
+            logger.info(demand_calculated[['surveydate', 'kw_i', 'kva_i', 'kvar_i']].head().to_string())
+            logger.info(f"DEBUG: Total records with valid kw_i: {demand_calculated['kw_i'].notna().sum()}")
+            if demand_calculated['kw_i'].notna().any():
+                logger.info(
+                    f"DEBUG: kw_i range: {demand_calculated['kw_i'].min():.2f} to {demand_calculated['kw_i'].max():.2f}")
+            if demand_calculated['kva_i'].notna().any():
+                logger.info(
+                    f"DEBUG: kva_i range: {demand_calculated['kva_i'].min():.2f} to {demand_calculated['kva_i'].max():.2f}")
+            if demand_calculated['kvar_i'].notna().any():
+                logger.info(
+                    f"DEBUG: kvar_i range: {demand_calculated['kvar_i'].min():.2f} to {demand_calculated['kvar_i'].max():.2f}")
+            logger.info("=" * 60)
 
         # Reorder columns
         cols = ['surveydate'] + [col for col in demand_calculated.columns if col != 'surveydate']
         demand_calculated = demand_calculated[cols]
 
         def format_datetime(dt_value):
+            """Format datetime for demand table display - MATCH UI FORMAT EXACTLY"""
             try:
                 if pd.isna(dt_value) or dt_value is None:
                     return "No valid data"
                 if isinstance(dt_value, pd.Timestamp):
-                    return dt_value.strftime(f'{dt_value.day} %b - %H:%M')
+                    # UI Format: "5 Jan at 12:30"
+                    return dt_value.strftime(f'{dt_value.day} %b at %H:%M')
                 elif isinstance(dt_value, str):
                     dt_obj = pd.to_datetime(dt_value)
-                    return dt_obj.strftime(f'{dt_obj.day} %b - %H:%M')
+                    # UI Format: "5 Jan at 12:30"
+                    return dt_obj.strftime(f'{dt_obj.day} %b at %H:%M')
                 else:
                     return str(dt_value)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"DateTime formatting error: {e}")
                 return "Invalid datetime"
 
         def safe_demand_calculation(demand_series, datetime_series, param_name):
+            """Calculate max, avg (with roundoff), and datetime for demand parameters"""
             try:
                 numeric_series = pd.to_numeric(demand_series, errors='coerce')
                 valid_mask = ~pd.isna(numeric_series)
@@ -661,8 +726,10 @@ def process_demand_overview_database_calculations(raw_df, month_info):
                     return 0.0, 0.0, "No valid data"
 
                 valid_data = numeric_series[valid_mask]
+
+                # Apply roundoff to BOTH max and avg (2 decimal places)
                 max_val = round(valid_data.max(), 2)
-                avg_val = round(valid_data.mean(), 2)
+                avg_val = round(valid_data.mean(), 2)  # ✅ ROUNDOFF APPLIED
 
                 if pd.isna(max_val):
                     max_datetime_formatted = "No valid data"
@@ -674,13 +741,14 @@ def process_demand_overview_database_calculations(raw_df, month_info):
                         max_datetime = datetime_series.iloc[max_idx]
                         max_datetime_formatted = format_datetime(max_datetime)
 
+                logger.info(f"{param_name}: Max={max_val:.2f}, Avg={avg_val:.2f}, DateTime={max_datetime_formatted}")
                 return max_val, avg_val, max_datetime_formatted
 
             except Exception as e:
                 logger.error(f"Error calculating {param_name}: {str(e)}")
                 return 0.0, 0.0, "Calculation error"
 
-        # Create Demand Table
+        # Create Demand Table - Using the updated safe_demand_calculation
         demand_table_data = []
 
         # Active Power (KW)
@@ -701,8 +769,15 @@ def process_demand_overview_database_calculations(raw_df, month_info):
         )
         demand_table_data.append(['Reactive', reactive_max, reactive_avg, reactive_max_time])
 
+        # Create DataFrame with rounded values
         demand_table_df = pd.DataFrame(demand_table_data,
                                        columns=['Parameter', 'Max', 'Avg', 'Date and time at max value'])
+
+        logger.info("=" * 60)
+        logger.info("DEMAND TABLE SUMMARY (All values rounded to 2 decimals):")
+        for row in demand_table_data:
+            logger.info(f"  {row[0]}: Max={row[1]}, Avg={row[2]}, DateTime={row[3]}")
+        logger.info("=" * 60)
 
         # Save to Excel
         with pd.ExcelWriter(processed_file, engine="openpyxl") as writer:
@@ -800,6 +875,7 @@ def create_demand_overview_comparison(chart_file, processed_file, month_info):
                     avg_diff_disp = 'N/A' if avg_match else 'Mismatch'
 
                 # DateTime COMPARISON
+
                 dt_match = (str(proc_dt).strip() == str(chart_dt).strip())
                 dt_match_text = 'PASS' if dt_match else 'FAIL'
 
